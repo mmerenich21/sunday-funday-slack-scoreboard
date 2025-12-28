@@ -10,8 +10,8 @@ load_dotenv()
 access_token = None
 expires_at = 0
 
-# Load team keys from environment variable
-TEAM_KEYS = os.environ["YAHOO_TEAM_KEYS"].split(",")  # e.g., 390.l.12345.t.1,390.l.12345.t.2
+TEAM_KEYS = os.environ["YAHOO_TEAM_KEYS"].split(",")  # e.g., 390.l.279011.t.6,390.l.279011.t.8
+CURRENT_WEEK = int(os.environ.get("YAHOO_CURRENT_WEEK", 1))  # default to week 1 if not set
 
 def refresh_access_token():
     """Refresh Yahoo OAuth access token using the refresh token."""
@@ -40,30 +40,57 @@ def yahoo_get(url):
     res.raise_for_status()
     return res
 
+def get_player_points(player_key):
+    """Fetch current and projected points for a player in the current week."""
+    url = f"https://fantasysports.yahooapis.com/fantasy/v2/player/{player_key}/stats;type=week;week={CURRENT_WEEK}"
+    res = yahoo_get(url)
+    data = xmltodict.parse(res.text)
+    player = data.get("fantasy_content", {}).get("player", {})
+
+    # Current points
+    current_points = float(player.get("player_points", {}).get("total") or 0)
+    # Projected points
+    projected_points = float(player.get("player_projected_points", {}).get("total") or 0)
+
+    return current_points, projected_points
+
 def get_team_scores():
-    """
-    Return current and projected points for the teams listed in TEAM_KEYS.
-    """
+    """Return current and projected points for the custom teams using player stats."""
     team_lines = ["🏈 *Custom Team Scores*\n"]
 
-    for key in TEAM_KEYS:
-        url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{key}/stats"
+    for team_key in TEAM_KEYS:
+        # Fetch roster
+        url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{team_key}/roster/players"
         try:
             res = yahoo_get(url)
         except Exception as e:
-            team_lines.append(f"*{key}*: Error fetching data ({e})")
+            team_lines.append(f"*{team_key}*: Error fetching roster ({e})")
             continue
 
         data = xmltodict.parse(res.text)
         team = data.get("fantasy_content", {}).get("team", {})
+        team_name = team.get("name") or team.get("nickname") or f"Team {team_key}"
 
-        # Extract name
-        name = team.get("name") or team.get("nickname") or f"Team {key}"
+        # Extract players
+        players = team.get("roster", {}).get("players", {}).get("player", [])
+        if not isinstance(players, list):
+            players = [players]
 
-        # Extract points safely
-        current_points = float(team.get("team_points", {}).get("total") or 0)
-        projected_points = float(team.get("team_projected_points", {}).get("total") or 0)
+        # Sum points for all players
+        total_current = 0
+        total_projected = 0
+        for player in players:
+            player_key = player.get("player_key")
+            if not player_key:
+                continue
+            try:
+                current, projected = get_player_points(player_key)
+                total_current += current
+                total_projected += projected
+            except Exception as e:
+                print(f"Error fetching player {player_key}: {e}")
+                continue
 
-        team_lines.append(f"*{name}*: Current = {current_points}, Projected = {projected_points}")
+        team_lines.append(f"*{team_name}*: Current = {total_current:.2f}, Projected = {total_projected:.2f}")
 
     return "\n".join(team_lines)

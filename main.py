@@ -5,42 +5,35 @@ import time
 import hmac
 import hashlib
 from fastapi import FastAPI, Request, HTTPException
+from flask import Flask, request, jsonify
 from dotenv import load_dotenv
 from yahoo import get_team_scores
 
-load_dotenv()
-app = FastAPI()
+app = Flask(__name__)
 
-def verify_slack(request: Request, body: bytes):
-    """Verify that incoming requests really come from Slack."""
-    timestamp = request.headers.get("X-Slack-Request-Timestamp")
-    signature = request.headers.get("X-Slack-Signature")
+SLACK_SIGNING_SECRET = os.environ["SLACK_SIGNING_SECRET"]
+SLACK_BOT_TOKEN = os.environ["SLACK_BOT_TOKEN"]
 
-    # Reject old requests
-    if abs(time.time() - int(timestamp)) > 300:
-        raise HTTPException(status_code=403, detail="Stale request")
+@app.route("/slack/commands", methods=["POST"])
+def slack_commands():
+    command_text = request.form.get("command")
+    if command_text != "/scoreboard":
+        return jsonify({"text": "Unknown command"}), 200
 
-    base = f"v0:{timestamp}:{body.decode()}"
-    my_sig = "v0=" + hmac.new(
-        os.environ["SLACK_SIGNING_SECRET"].encode(),
-        base.encode(),
-        hashlib.sha256
-    ).hexdigest()
+    # Fetch scores from Yahoo
+    try:
+        scoreboard = get_team_scores()
+    except Exception as e:
+        scoreboard = f"Error fetching team scores: {e}"
 
-    if not hmac.compare_digest(my_sig, signature):
-        raise HTTPException(status_code=403, detail="Invalid signature")
-
-@app.post("/slack/commands")
-async def slack_commands(request: Request):
-    body = await request.body()
-    verify_slack(request, body)  # Comment this out for local testing if needed
-
-    scoreboard = get_team_scores()  # Uses the two-team function
-
-    return {
-        "response_type": "in_channel",  # visible to everyone in channel
+    return jsonify({
+        "response_type": "in_channel",
         "text": scoreboard
-    }
+    })
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
+
 
 
 
