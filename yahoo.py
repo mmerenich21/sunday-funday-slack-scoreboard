@@ -6,12 +6,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Global token management
+# Global access token management
 access_token = None
 expires_at = 0
 
-# Replace with your two Yahoo Fantasy team IDs
-TEAM_IDS = [6, 8]  # Example: [1, 5]
+# Load team keys from environment variable
+TEAM_KEYS = os.environ["YAHOO_TEAM_KEYS"].split(",")  # e.g., 390.l.12345.t.1,390.l.12345.t.2
 
 def refresh_access_token():
     """Refresh Yahoo OAuth access token using the refresh token."""
@@ -27,7 +27,7 @@ def refresh_access_token():
     res.raise_for_status()
     data = res.json()
     access_token = data["access_token"]
-    expires_at = time.time() + data["expires_in"] - 60  # buffer for safety
+    expires_at = time.time() + data["expires_in"] - 60  # 1 min buffer
 
 def yahoo_get(url):
     """Generic GET request to Yahoo Fantasy API with automatic token refresh."""
@@ -42,38 +42,28 @@ def yahoo_get(url):
 
 def get_team_scores():
     """
-    Returns current and projected points for the two specified teams.
-    Works even if teams are not in official matchups.
+    Return current and projected points for the teams listed in TEAM_KEYS.
     """
-    league_key = os.environ["YAHOO_LEAGUE_KEY"]
-    url = f"https://fantasysports.yahooapis.com/fantasy/v2/league/{league_key}/teams"
-    res = yahoo_get(url)
-    data = xmltodict.parse(res.text)
+    team_lines = ["🏈 *Custom Team Scores*\n"]
 
-    # Handle league node: list or dict
-    league = data["fantasy_content"]["league"]
-    league_node = league[1] if isinstance(league, list) else league
-
-    # Extract teams; always as a list
-    all_teams = league_node["teams"]["team"]
-    if not isinstance(all_teams, list):
-        all_teams = [all_teams]
-
-    lines = ["🏈  *Boner Bowl Scoreboard* 🏈\n"]
-
-    for team in all_teams:
-        # Safely get team_id
-        team_id = int(team.get("team_id") or team.get("@team_id", 0))
-        if team_id not in TEAM_IDS:
+    for key in TEAM_KEYS:
+        url = f"https://fantasysports.yahooapis.com/fantasy/v2/team/{key}/stats"
+        try:
+            res = yahoo_get(url)
+        except Exception as e:
+            team_lines.append(f"*{key}*: Error fetching data ({e})")
             continue
 
-        name = team.get("name") or team.get("nickname") or f"Team {team_id}"
+        data = xmltodict.parse(res.text)
+        team = data.get("fantasy_content", {}).get("team", {})
 
-        # Safely get current and projected points
-        current_points = float(team.get("team_points", {}).get("total", 0))
-        projected_points = float(team.get("team_projected_points", {}).get("total", 0))
+        # Extract name
+        name = team.get("name") or team.get("nickname") or f"Team {key}"
 
-        lines.append(f"*{name}*: Current = {current_points}, Projected = {projected_points}")
+        # Extract points safely
+        current_points = float(team.get("team_points", {}).get("total") or 0)
+        projected_points = float(team.get("team_projected_points", {}).get("total") or 0)
 
-    return "\n".join(lines)
+        team_lines.append(f"*{name}*: Current = {current_points}, Projected = {projected_points}")
 
+    return "\n".join(team_lines)
